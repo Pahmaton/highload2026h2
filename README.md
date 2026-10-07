@@ -459,6 +459,397 @@ N = max(⌈7 / 16⌉, ⌈0,10 / 8,8⌉) = 1
 | Все поды сервиса в ДЦ | Envoy отправляет запросы в соседний ДЦ через east-west-шлюз |
 | ДЦ целиком | п. 3.6 |
 
+## 5. Логическая схема БД
+
+Схема построена от запросов MVP (п. 1, табл. 2.2.2): каждое поле нужно хотя бы одному запросу. Выбор СУБД, индексы и шардирование - в разделе 6.
+
+### 5.1. Схема: основные данные
+
+```mermaid
+erDiagram
+    CLIENT ||--o{ DEVICE : "входит с"
+    CLIENT ||--o{ CLIENT_DOCUMENT : "идентифицирован по"
+    CLIENT ||--o{ ACCOUNT : "владеет"
+    ACCOUNT ||--o{ CARD : "карта к счёту"
+    ACCOUNT ||--o{ OPERATION : "движение по счёту"
+    CARD |o--o{ OPERATION : "оплата картой"
+    OPERATION |o--o| OPERATION : "вторая сторона перевода внутри банка"
+    CATEGORY ||--o{ MCC : "группирует"
+    CATEGORY ||--o{ OPERATION : "категория"
+    SBP_BANK |o--o{ OPERATION : "банк контрагента"
+    CLIENT ||--o{ DEPOSIT : "вкладчик"
+    ACCOUNT ||--o{ DEPOSIT : "счёт пополнения и выплаты"
+    PRODUCT ||--o{ DEPOSIT : "тариф"
+    DEPOSIT |o--o{ OPERATION : "операции по вкладу"
+    DEPOSIT |o--o{ INTEREST_ACCRUAL : "начисления"
+    CLIENT ||--o{ LOAN_APPLICATION : "подал"
+    ACCOUNT ||--o{ LOAN_APPLICATION : "счёт зачисления"
+    PRODUCT ||--o{ LOAN_APPLICATION : "тариф"
+    LOAN_APPLICATION ||--o| LOAN : "выдан по заявке"
+    CLIENT ||--o{ LOAN : "заёмщик"
+    ACCOUNT ||--o{ LOAN : "счёт выдачи и погашения"
+    LOAN ||--|{ LOAN_SCHEDULE : "график"
+    LOAN |o--o{ OPERATION : "операции по кредиту"
+    LOAN |o--o{ INTEREST_ACCRUAL : "начисления"
+    OPERATION |o--o| LOAN_SCHEDULE : "списание платежа"
+
+    CLIENT {
+        int64 id PK
+        varchar(16) phone UK "E.164"
+        varchar(64) last_name
+        varchar(64) first_name
+        varchar(64) middle_name
+        date birth_date
+        char(10) passport_number "серия и номер"
+        date passport_issued_at
+        char(7) passport_issuer_code
+        varchar(128) passport_issued_by
+        varchar(256) registration_address
+        enum status
+        timestamp created_at
+        timestamp updated_at
+    }
+    DEVICE {
+        int64 id PK
+        int64 client_id FK
+        uuid install_id UK
+        enum platform "iOS или Android"
+        varchar(256) push_token
+        bytes(64) pin_hash "Argon2id"
+        bytes(91) biometric_public_key "для Face ID"
+        int16 failed_pin_attempts
+        enum status
+        timestamp created_at
+    }
+    CLIENT_DOCUMENT {
+        int64 id PK
+        int64 client_id FK
+        enum type "паспорт, регистрация, селфи"
+        varchar(64) file_key FK "объект в FILE_OBJECT"
+        int32 size_bytes
+        bytes(32) sha256
+        timestamp uploaded_at
+    }
+    ACCOUNT {
+        int64 id PK
+        int64 client_id FK
+        char(20) number UK
+        char(3) currency
+        money balance
+        money hold_amount "сумма активных удержаний"
+        bool is_default "для входящих переводов"
+        enum status
+        timestamp opened_at
+        timestamp closed_at
+    }
+    CARD {
+        int64 id PK
+        int64 account_id FK
+        bytes(32) pan_hash UK "HMAC номера карты"
+        char(16) pan_masked
+        date expiry
+        enum payment_system
+        enum type "физическая или виртуальная"
+        enum status
+        timestamp issued_at
+    }
+    OPERATION {
+        int64 id PK
+        int64 account_id FK
+        int64 card_id FK
+        int64 deposit_id FK
+        int64 loan_id FK
+        int64 linked_operation_id FK
+        enum type
+        enum status "удержание, проведена, отменена, в обработке"
+        money amount
+        money hold_amount
+        char(3) currency
+        int16 mcc
+        int16 category_id FK
+        varchar(64) counterparty_name "снимок на момент операции"
+        varchar(16) counterparty_phone
+        int32 counterparty_bank_id FK
+        varchar(140) comment
+        varchar(32) external_id UK "RRN или ID операции СБП"
+        timestamp created_at
+        timestamp updated_at
+    }
+    DEPOSIT {
+        int64 id PK
+        int64 client_id FK
+        int64 account_id FK
+        int32 product_id FK
+        varchar(20) contract_number UK
+        char(20) deposit_account_number UK
+        decimal rate
+        money balance
+        money accrued_interest
+        timestamp opened_at
+        date maturity_date
+        timestamp closed_at
+        enum status
+    }
+    LOAN {
+        int64 id PK
+        int64 client_id FK
+        int64 account_id FK
+        int64 application_id FK
+        varchar(20) contract_number UK
+        char(20) loan_account_number UK
+        money amount
+        decimal rate
+        int16 term_months
+        money monthly_payment
+        money principal_debt
+        money interest_debt
+        timestamp issued_at
+        timestamp closed_at
+        enum status
+    }
+    LOAN_SCHEDULE {
+        int64 loan_id PK, FK
+        int16 number PK
+        date due_date
+        money principal_amount
+        money interest_amount
+        enum status "запланирован, оплачен, просрочен"
+        int64 operation_id FK
+        timestamp paid_at
+    }
+    LOAN_APPLICATION {
+        int64 id PK
+        int64 client_id FK
+        int64 account_id FK
+        int32 product_id FK
+        money amount
+        int16 term_months
+        money declared_income
+        bytes(32) offer_signature "подписанная оферта"
+        enum status
+        int16 score
+        int16 decision_code
+        money approved_amount
+        decimal approved_rate
+        varchar(64) credit_report_key FK "отчёт БКИ в FILE_OBJECT"
+        timestamp created_at
+        timestamp decided_at
+    }
+    INTEREST_ACCRUAL {
+        int64 deposit_id FK "заполнено ровно одно из двух"
+        int64 loan_id FK
+        date accrual_date "уникальна вместе с продуктом"
+        money base_amount
+        decimal rate
+        money amount
+    }
+    PRODUCT {
+        int32 id PK
+        enum type "вклад или кредит"
+        varchar(64) name
+        decimal rate
+        int16 min_term_months
+        int16 max_term_months
+        money min_amount
+        money max_amount
+        bool replenishable
+        bool is_active
+    }
+    CATEGORY {
+        int16 id PK
+        varchar(64) name
+        varchar(64) icon_key
+    }
+    MCC {
+        int16 code PK
+        int16 category_id FK
+        varchar(128) description
+    }
+    SBP_BANK {
+        int32 id PK
+        char(12) sbp_member_id UK
+        varchar(64) name
+        char(9) bic
+        varchar(64) logo_key
+    }
+```
+
+### 5.2. Схема: файлы, кеши, буферы и производные данные
+
+Таблицы из п. 5.1 показаны без полей.
+
+```mermaid
+erDiagram
+    CLIENT_DOCUMENT ||--|| FILE_OBJECT : "фото документа"
+    LOAN_APPLICATION |o--o| FILE_OBJECT : "отчёт БКИ"
+    CLIENT ||--o{ SESSION : "сессия"
+    DEVICE ||--o{ SESSION : "открыта с"
+    CLIENT |o..o{ OTP_CODE : "по номеру телефона"
+    CLIENT ||--o{ IDEMPOTENCY_KEY : "ключ повтора"
+    CLIENT ||--o{ RECIPIENT_LOOKUP : "ищет получателя"
+    ACCOUNT |o--o{ RECIPIENT_LOOKUP : "счёт получателя в банке"
+    OPERATION |o..o{ EVENT : "изменение операции"
+    LOAN_APPLICATION |o..o{ EVENT : "заявка и решение"
+    OPERATION ||..|| OPERATION_SEARCH : "индексируется"
+
+    FILE_OBJECT {
+        varchar(64) key PK
+        varchar(32) content_type
+        blob content "фото 500 КБ, отчёт 10 КБ"
+        timestamp created_at
+    }
+    SESSION {
+        bytes(32) token_hash PK "TTL 15 мин"
+        int64 client_id FK
+        int64 device_id FK
+        timestamp created_at
+        timestamp expires_at
+    }
+    OTP_CODE {
+        varchar(16) phone PK "TTL 5 мин"
+        enum purpose "регистрация или новое устройство"
+        bytes(32) code_hash
+        int8 attempts
+        timestamp expires_at
+    }
+    IDEMPOTENCY_KEY {
+        int64 client_id PK, FK "TTL 24 ч"
+        uuid key PK
+        bytes(32) request_hash
+        enum status
+        int64 result_id "созданная операция, вклад, заявка"
+        timestamp expires_at
+    }
+    RECIPIENT_LOOKUP {
+        uuid id PK "TTL 10 мин"
+        int64 client_id FK
+        varchar(16) phone
+        varchar(64) recipient_name
+        int64 recipient_account_id FK "если получатель наш клиент"
+        int32[] bank_ids "банки получателя в СБП"
+        varchar(32) sbp_request_id
+        timestamp expires_at
+    }
+    EVENT {
+        uuid id PK "хранение 3 суток"
+        enum type
+        int64 client_id FK
+        enum entity_type "операция или заявка"
+        int64 entity_id
+        json payload "снимок операции"
+        timestamp created_at
+    }
+    OPERATION_SEARCH {
+        int64 operation_id PK, FK
+        int64 client_id FK
+        int64 account_id
+        int64 card_id
+        enum type
+        enum status
+        money amount
+        int16 category_id
+        varchar(64) counterparty_name
+        varchar(16) counterparty_phone
+        varchar(140) comment
+        timestamp created_at
+    }
+```
+
+### 5.3. Описание таблиц
+
+Размер строки - сумма полей без служебных данных СУБД и индексов. Хранение 5 лет: в таблицах договоров - действующие и закрытые за 5 лет. Для кешей и буферов строк - записей, живущих одновременно в пике.
+
+| Таблица | Вид | Что хранит | Строк | Строка, Б | Объём |
+| --- | --- | --- | --- | --- | --- |
+| CLIENT | основные | клиенты: телефон, ФИО, паспорт | 54,9 млн - клиентская база | 642 | 35 ГБ |
+| DEVICE | основные | привязанные устройства: PIN, ключ Face ID, push-токен | 54,9 млн - в среднем одно устройство на клиента | 455 | 25 ГБ |
+| CLIENT_DOCUMENT | основные | описание фото документов | 165 млн = 54,9 млн x 3 | 125 | 21 ГБ |
+| ACCOUNT | основные | текущие счета: остаток, удержания | 91 млн - по счёту на карту | 73 | 6,6 ГБ |
+| CARD | основные | карты | 91 млн | 79 | 7,2 ГБ |
+| OPERATION | основные | лента операций и выписка по счёту | 111 млрд = 61,0 млн x 1 825 сут | 345 | 38,4 ТБ |
+| DEPOSIT | основные | вклады | 63,8 млн = 5,8 млн + 11,6 млн закрытий в год x 5 лет | 113 | 7,2 ГБ |
+| LOAN | основные | кредиты | 18,9 млн = 7,1 млн + 2,37 млн погашений в год x 5 лет | 131 | 2,5 ГБ |
+| LOAN_SCHEDULE | основные | график платежей | 682 млн = 18,9 млн x 36 | 47 | 32 ГБ |
+| LOAN_APPLICATION | основные | заявки и решения скоринга | 59,9 млн = 32,8 тыс. x 1 825 сут | 179 | 10,7 ГБ |
+| INTEREST_ACCRUAL | основные | подневные начисления процентов | 23,5 млрд = 12,9 млн x 1 825 сут | 44 | 1,04 ТБ |
+| PRODUCT | справочник | тарифы вкладов и кредитов | ~100 | 99 | < 1 МБ |
+| CATEGORY | справочник | категории операций | ~30 | 130 | < 1 МБ |
+| MCC | справочник | коды MCC и их категории | ~1 000 | 132 | < 1 МБ |
+| SBP_BANK | справочник | участники СБП | ~220 | 153 | < 1 МБ |
+| FILE_OBJECT | файлы | фото документов, кредитные отчёты БКИ | 225 млн = 165 млн фото + 59,9 млн отчётов | 500 КБ / 10 КБ | 83,0 ТБ |
+| SESSION | кеш, TTL 15 мин | сессии после входа | 1,45 млн = 1 608/с x 900 с | 64 | 93 МБ |
+| OTP_CODE | кеш, TTL 5 мин | коды из SMS | 1,1 тыс. = 3,7/с x 300 с | 58 | < 1 МБ |
+| IDEMPOTENCY_KEY | кеш, TTL 24 ч | ключи повторов клиентских запросов | 10,3 млн = 119/с x 86 400 с | 73 | 0,75 ГБ |
+| RECIPIENT_LOOKUP | кеш, TTL 10 мин | результат определения получателя | 208 тыс. = 347/с x 600 с | 192 | 40 МБ |
+| EVENT | буфер, хранение 3 сут | события по операциям и заявкам | 323 млн = 107,7 млн в сутки x 3 | 387 | 125 ГБ |
+| OPERATION_SEARCH | производные | поисковый индекс по операциям | 111 млрд | 272 | 30,3 ТБ |
+| **Итого** | | | | | **153 ТБ** |
+
+### 5.4. Нагрузка на чтение и запись
+
+Нагрузка из табл. 2.3.2, разложенная по таблицам. Пиковый QPS = средний x 3.
+
+**Днём, QPS (средний / пиковый)**
+
+| Таблица | Чтение | Запись |
+| --- | --- | --- |
+| CLIENT | 257 / 768 | 0,3 / 0,9 |
+| DEVICE | 1 241 / 3 723 | 1,2 / 3,7 |
+| CLIENT_DOCUMENT | 0,5 / 1,4 | 0,5 / 1,4 |
+| ACCOUNT | 581 / 1 743 | 1 173 / 3 516 |
+| CARD | 1 004 / 3 010 | 0,16 / 0,47 |
+| OPERATION | 1 004 / 3 011 | 1 243 / 3 724 |
+| DEPOSIT | 538 / 1 612 | 3,1 / 9,1 |
+| LOAN | 538 / 1 612 | 0,09 / 0,28 |
+| LOAN_SCHEDULE | 2,7 / 8,2 | 0,09 / 0,28 |
+| LOAN_APPLICATION | 0,47 / 1,4 | 0,85 / 2,5 |
+| INTEREST_ACCRUAL | - | - |
+| FILE_OBJECT | 0,5 / 1,4 | 0,9 / 2,5 |
+| **Итого основные таблицы** | **5 167 / 15 490** | **2 422 / 7 258** |
+| Справочники | 1 658 / 4 970 | - |
+| SESSION | 1 333 / 3 996 | 536 / 1 608 |
+| OTP_CODE | 1,2 / 3,7 | 2,5 / 7,4 |
+| IDEMPOTENCY_KEY | - | 119 / 357 |
+| RECIPIENT_LOOKUP | 116 / 347 | 116 / 347 |
+| EVENT | 2 486 / 7 449 | 1 244 / 3 726 |
+| OPERATION_SEARCH | 25 / 76 | 1 243 / 3 724 |
+
+**Ночное окно 03:00-05:00, пиковый QPS** (начисление процентов и списание по графику)
+
+| Таблица | Чтение | Запись |
+| --- | --- | --- |
+| INTEREST_ACCRUAL | - | 1 794 |
+| DEPOSIT | 807 | 807 |
+| LOAN | 1 020 | 1 020 |
+| LOAN_SCHEDULE | 33 | 33 |
+| ACCOUNT, OPERATION, EVENT, OPERATION_SEARCH | - | по 33 |
+| **Итого основные таблицы** | **1 860** | **3 720** |
+
+### 5.5. Консистентность и распределение нагрузки по ключам
+
+Почти все запросы адресованы одному клиенту: по client_id или по account_id и card_id, которые ему принадлежат. Клиентов 54,9 млн, поэтому по хешу клиента нагрузка распределяется ровно. Исключения - ключи CARD.pan_hash, OPERATION.external_id и CLIENT.phone, около 3 600 запросов в секунду в пике. По времени: дневной пик 18:00-21:00 МСК, фоновые задачи в окне 03:00-05:00.
+
+| Таблица | Консистентность | Распределение нагрузки по ключам |
+| --- | --- | --- |
+| ACCOUNT | строгая: остаток и hold_amount меняются только в одной транзакции с OPERATION; баланс читается только актуальный | по client_id равномерно; горячий счёт - получатель массовых переводов, все зачисления в одну строку |
+| OPERATION | строгая, атомарно с ACCOUNT; external_id уникален; лента - read-your-writes | (account_id, created_at): запись в конец истории, читаются в основном свежие записи, 5 лет истории почти холодные; id растут со временем, распределять по id или времени нельзя |
+| Перевод внутри банка | списание у отправителя и зачисление получателю атомарно | счета отправителя и получателя - разные ключи |
+| DEPOSIT, LOAN | строгая, вместе с ACCOUNT и OPERATION | по client_id на каждом запросе баланса, но у 87-89 % клиентов чтение пустое; ночью - проход по всем действующим |
+| LOAN_SCHEDULE | строгая, вместе с LOAN и OPERATION | ночью выборка по due_date; распределять по due_date нельзя - платежи дня окажутся в одном месте |
+| INTEREST_ACCRUAL | одно начисление на продукт в сутки, атомарно с accrued_interest или interest_debt | только запись, раз в сутки по всем продуктам |
+| LOAN_APPLICATION | строгие переходы статусов, выдача ровно один раз | по client_id, нагрузка мала |
+| CLIENT | запись строгая, phone уникален; имя получателя можно читать с реплики с отставанием до секунд | id; phone - 768/с, равномерно |
+| DEVICE | строгая для status и счётчика ошибок PIN | id; client_id для push - равномерно |
+| CARD | строгая для status | pan_hash - равномерный хеш, 1 406/с |
+| CLIENT_DOCUMENT, FILE_OBJECT | неизменяемы после записи | client_id, key; нагрузка мала |
+| Справочники | в конечном счёте, обновление за минуты | малы, около 5 000 чтений в секунду - копия в памяти сервисов |
+| SESSION | строгая внутри ДЦ, между ДЦ не реплицируется | token_hash, равномерно; чтение на каждом запросе API |
+| OTP_CODE | атомарный счётчик попыток | phone; нагрузка мала |
+| IDEMPOTENCY_KEY | строгая, в одной транзакции с создаваемой записью | (client_id, key), равномерно |
+| RECIPIENT_LOOKUP | read-after-write | id, равномерно |
+| EVENT | доставка не реже одного раза, порядок внутри клиента | client_id - события клиента идут по порядку |
+| OPERATION_SEARCH | в конечном счёте, отставание до секунд | client_id - поиск затрагивает данные одного клиента |
+
 
 ## Список источников
 
