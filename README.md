@@ -851,6 +851,320 @@ erDiagram
 | EVENT | доставка не реже одного раза, порядок внутри клиента | client_id - события клиента идут по порядку |
 | OPERATION_SEARCH | в конечном счёте, отставание до секунд | client_id - поиск затрагивает данные одного клиента |
 
+## 6. Физическая схема БД
+
+Схема получена из логической (п. 5). У каждой таблицы выбрана СУБД, ключ шардирования и индексы под запросы из п. 5.2 (П.2). Размер строки PostgreSQL - поля по максимальной длине, как в п. 5.2, плюс 28 Б служебных данных (заголовок строки 24 Б и указатель 4 Б).
+
+### 6.1. Схема
+
+Сплошные стрелки - связи внутри одной БД, пунктир - ссылки между разными БД без внешнего ключа, жирные - потоки данных. В каждой таблице сверху индексы, ниже поля.
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 420, "nodeSpacing": 25, "rankSpacing": 45}}}%%
+flowchart TB
+  subgraph CORE["pg-core: PostgreSQL 17, 32 шарда по client_id (1024 бакета), в шарде 3 узла в ДЦ-1/2/3 + отложенная реплика"]
+    direction LR
+    ACCOUNT["<b>ACCOUNT</b> · fillfactor 80<br/>────────<br/>PK B-tree (client_id, id)<br/>────────<br/>client_id bigint<br/>id bigint<br/>number char(20)<br/>currency char(3)<br/>balance bigint<br/>hold_amount bigint<br/>is_default boolean<br/>status smallint<br/>opened_at timestamptz<br/>closed_at timestamptz<br/>updated_at timestamptz"]
+    CARD["<b>CARD</b><br/>────────<br/>PK B-tree (client_id, id)<br/>────────<br/>client_id bigint<br/>id bigint<br/>account_id bigint<br/>pan_masked char(16)<br/>expiry date<br/>payment_system smallint<br/>type smallint<br/>status smallint<br/>issued_at timestamptz<br/>updated_at timestamptz"]
+    OPERATION["<b>OPERATION</b> · партиции по месяцам, RANGE (id)<br/>────────<br/>PK B-tree (client_id, id)<br/>Hash (external_id) в 2 последних партициях<br/>B-tree (id) WHERE status = hold в 2 последних партициях<br/>────────<br/>client_id bigint<br/>id bigint Snowflake, в нём время создания<br/>account_id bigint<br/>card_id bigint<br/>deposit_id bigint<br/>loan_id bigint<br/>linked_operation_id bigint<br/>type smallint<br/>status smallint<br/>amount bigint<br/>hold_amount bigint<br/>currency char(3)<br/>mcc smallint<br/>category_id smallint<br/>counterparty_name varchar(64)<br/>counterparty_phone varchar(16)<br/>counterparty_bank_id int<br/>comment varchar(140)<br/>external_id varchar(32)<br/>updated_at timestamptz"]
+    IDEMPOTENCY_KEY["<b>IDEMPOTENCY_KEY</b> · TTL 24 ч<br/>────────<br/>PK B-tree (client_id, key)<br/>B-tree (expires_at)<br/>────────<br/>client_id bigint<br/>key uuid<br/>request_hash bytea(32)<br/>status smallint<br/>result_id bigint<br/>expires_at timestamptz"]
+    DEPOSIT["<b>DEPOSIT</b> · fillfactor 80<br/>────────<br/>PK B-tree (client_id, id)<br/>B-tree (id) WHERE status = active<br/>────────<br/>client_id bigint<br/>id bigint<br/>account_id bigint<br/>product_id int<br/>contract_number varchar(20)<br/>deposit_account_number char(20)<br/>rate numeric<br/>balance bigint<br/>accrued_interest bigint<br/>last_accrual_date date<br/>opened_at timestamptz<br/>maturity_date date<br/>closed_at timestamptz<br/>status smallint<br/>updated_at timestamptz"]
+    LOAN["<b>LOAN</b> · fillfactor 80<br/>────────<br/>PK B-tree (client_id, id)<br/>B-tree (id) WHERE status = active<br/>────────<br/>client_id bigint<br/>id bigint<br/>account_id bigint<br/>application_id bigint<br/>contract_number varchar(20)<br/>loan_account_number char(20)<br/>amount bigint<br/>rate numeric<br/>term_months smallint<br/>monthly_payment bigint<br/>principal_debt bigint<br/>interest_debt bigint<br/>last_accrual_date date<br/>issued_at timestamptz<br/>closed_at timestamptz<br/>status smallint<br/>updated_at timestamptz"]
+    LOAN_SCHEDULE["<b>LOAN_SCHEDULE</b><br/>────────<br/>PK B-tree (client_id, loan_id, number)<br/>B-tree (due_date) WHERE status ≠ paid<br/>────────<br/>client_id bigint<br/>loan_id bigint<br/>number smallint<br/>due_date date<br/>principal_amount bigint<br/>interest_amount bigint<br/>status smallint<br/>operation_id bigint<br/>paid_at timestamptz<br/>updated_at timestamptz"]
+    LOAN_APPLICATION["<b>LOAN_APPLICATION</b><br/>────────<br/>PK B-tree (client_id, id)<br/>────────<br/>client_id bigint<br/>id bigint<br/>account_id bigint<br/>product_id int<br/>amount bigint<br/>term_months smallint<br/>declared_income bigint<br/>offer_signature bytea(32)<br/>status smallint<br/>score smallint<br/>decision_code smallint<br/>approved_amount bigint<br/>approved_rate numeric<br/>credit_report bytea, отчёт БКИ в TOAST<br/>created_at timestamptz<br/>decided_at timestamptz<br/>updated_at timestamptz"]
+    INTEREST_ACCRUAL["<b>INTEREST_ACCRUAL</b> · партиции по месяцам<br/>────────<br/>BRIN (accrual_date)<br/>────────<br/>client_id bigint<br/>deposit_id bigint<br/>loan_id bigint<br/>accrual_date date<br/>base_amount bigint<br/>rate numeric<br/>amount bigint"]
+  end
+
+  subgraph GLOBAL["pg-global: PostgreSQL 17, без шардирования, 3 узла в ДЦ-1/2/3 + отложенная реплика"]
+    direction LR
+    CLIENT["<b>CLIENT</b><br/>────────<br/>PK B-tree (id)<br/>UNIQUE B-tree (phone) INCLUDE (id, default_account_id)<br/>────────<br/>id bigint, младшие 10 бит - бакет<br/>phone varchar(16)<br/>last_name varchar(64)<br/>first_name varchar(64)<br/>middle_name varchar(64)<br/>birth_date date<br/>passport_number char(10)<br/>passport_issued_at date<br/>passport_issuer_code char(7)<br/>passport_issued_by varchar(128)<br/>registration_address varchar(256)<br/>default_account_id bigint<br/>status smallint<br/>created_at timestamptz<br/>updated_at timestamptz"]
+    CARD_BY_PAN["<b>CARD_BY_PAN</b><br/>────────<br/>PK B-tree (pan_hash)<br/>────────<br/>pan_hash bytea(32)<br/>client_id bigint<br/>card_id bigint"]
+    DEVICE["<b>DEVICE</b><br/>────────<br/>PK B-tree (id)<br/>UNIQUE B-tree (install_id)<br/>B-tree (client_id)<br/>────────<br/>id bigint<br/>client_id bigint<br/>install_id uuid<br/>platform smallint<br/>push_token varchar(256)<br/>pin_hash bytea(64)<br/>biometric_public_key bytea(91)<br/>failed_pin_attempts smallint<br/>status smallint<br/>created_at timestamptz<br/>updated_at timestamptz"]
+    CLIENT_DOCUMENT["<b>CLIENT_DOCUMENT</b><br/>────────<br/>PK B-tree (id)<br/>B-tree (client_id)<br/>────────<br/>id bigint<br/>client_id bigint<br/>type smallint<br/>file_key varchar(64)<br/>size_bytes int<br/>sha256 bytea(32)<br/>uploaded_at timestamptz"]
+    DICT["<b>Справочники</b> · копия в памяти сервисов<br/>────────<br/>PRODUCT: PK id; type, name, rate, min_term_months, max_term_months, min_amount, max_amount, replenishable, is_active, updated_at<br/>CATEGORY: PK id; name, icon_key<br/>MCC: PK code; category_id, description<br/>SBP_BANK: PK id, UNIQUE sbp_member_id; name, bic, logo_key"]
+  end
+
+  subgraph REDIS["Redis: свой в каждом ДЦ, master + replica + Sentinel"]
+    direction LR
+    SESSION["<b>SESSION</b> · TTL 15 мин<br/>────────<br/>ключ session:token_hash<br/>────────<br/>client_id, device_id, created_at"]
+    OTP_CODE["<b>OTP_CODE</b> · TTL 5 мин<br/>────────<br/>ключ otp:phone<br/>────────<br/>purpose, code_hash, attempts"]
+    RECIPIENT_LOOKUP["<b>RECIPIENT_LOOKUP</b> · TTL 10 мин<br/>────────<br/>ключ lookup:id<br/>────────<br/>client_id, phone, recipient_name,<br/>recipient_client_id, recipient_account_id,<br/>bank_ids, sbp_request_id"]
+  end
+
+  subgraph KAFKA["Kafka: 3 ДЦ, RF 3, min.insync.replicas 2"]
+    EVENT["<b>EVENT</b> · топик events, хранение 3 сут<br/>────────<br/>64 партиции, ключ client_id<br/>────────<br/>id, type, client_id, entity_type, entity_id, payload, created_at"]
+  end
+
+  subgraph OS["OpenSearch: индексы operations-ГГГГ, 128 шардов на индекс, 1 реплика в другом ДЦ"]
+    OPERATION_SEARCH["<b>OPERATION_SEARCH</b> · routing = client_id<br/>────────<br/>инвертированный индекс: counterparty_name, comment<br/>BKD-дерево: amount, created_at<br/>keyword: counterparty_phone, type, status, category_id, card_id<br/>────────<br/>operation_id, client_id, account_id, card_id, type, status, amount,<br/>category_id, counterparty_name, counterparty_phone, comment, created_at"]
+  end
+
+  subgraph S3["S3: Ceph RGW, EC 4+2, ДЦ-1 и ДЦ-2"]
+    FILE_OBJECT["<b>FILE_OBJECT</b> · бакет client-documents, версионирование<br/>────────<br/>ключ file_key<br/>────────<br/>фото документа 500 КБ, content_type"]
+  end
+
+  ACCOUNT -->|account_id| CARD
+  ACCOUNT -->|account_id| OPERATION
+  CARD -->|card_id| OPERATION
+  DEPOSIT -->|deposit_id| OPERATION
+  LOAN -->|loan_id| OPERATION
+  LOAN_APPLICATION -->|application_id| LOAN
+  LOAN -->|loan_id| LOAN_SCHEDULE
+  DEPOSIT -->|deposit_id| INTEREST_ACCRUAL
+  LOAN -->|loan_id| INTEREST_ACCRUAL
+
+  CLIENT -->|client_id| DEVICE
+  CLIENT -->|client_id| CLIENT_DOCUMENT
+  CLIENT -.->|"client_id → бакет → шард"| ACCOUNT
+  CARD_BY_PAN -.->|"client_id, card_id"| CARD
+  CLIENT_DOCUMENT -.->|file_key| FILE_OBJECT
+  SESSION -.->|device_id| DEVICE
+  RECIPIENT_LOOKUP -.->|"recipient_client_id, recipient_account_id"| ACCOUNT
+  OPERATION ==>|"CDC: Debezium"| EVENT
+  LOAN_APPLICATION ==>|"CDC: Debezium"| EVENT
+  EVENT ==>|индексатор| OPERATION_SEARCH
+```
+
+### 6.2. Описание таблиц
+
+Для ACCOUNT, DEPOSIT и LOAN объём разделён на fillfactor 0,8: свободное место в странице позволяет обновлять остаток без обновления индексов (HOT-обновление). Отчёт БКИ хранится в LOAN_APPLICATION в сжатом виде (TOAST, около 4 КБ из 10 КБ).
+
+| Таблица | БД | Шардирование | Партиции | Строк | Строка, Б | Данные | Индексы | Всего |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| OPERATION | pg-core | client_id, 32 шарда | по месяцам, 60 | 111,3 млрд | 373 | 41,5 ТБ | 4,54 ТБ | 46,1 ТБ |
+| INTEREST_ACCRUAL | pg-core | client_id | по месяцам, 60 | 23,5 млрд | 80 | 1,88 ТБ | 57 МБ | 1,88 ТБ |
+| LOAN_APPLICATION | pg-core | client_id | - | 59,9 млн | 169 + отчёт 4 КБ | 250 ГБ | 2,4 ГБ | 252 ГБ |
+| LOAN_SCHEDULE | pg-core | client_id | - | 682 млн | 91 | 62,1 ГБ | 38,7 ГБ | 101 ГБ |
+| ACCOUNT | pg-core | client_id | - | 91 млн | 109 | 12,4 ГБ | 3,6 ГБ | 16,0 ГБ |
+| DEPOSIT | pg-core | client_id | - | 63,8 млн | 153 | 12,2 ГБ | 2,7 ГБ | 14,9 ГБ |
+| CARD | pg-core | client_id | - | 91 млн | 91 | 8,3 ГБ | 3,6 ГБ | 11,9 ГБ |
+| LOAN | pg-core | client_id | - | 18,9 млн | 171 | 4,0 ГБ | 1,0 ГБ | 5,0 ГБ |
+| IDEMPOTENCY_KEY | pg-core | client_id | - | 10,3 млн | 101 | 1,0 ГБ | 0,8 ГБ | 1,8 ГБ |
+| **Итого pg-core** | | | | | | **43,8 ТБ** | **4,6 ТБ** | **48,4 ТБ** |
+| CLIENT | pg-global | нет | - | 54,9 млн | 678 | 37,2 ГБ | 4,7 ГБ | 41,9 ГБ |
+| CLIENT_DOCUMENT | pg-global | нет | - | 164,7 млн | 153 | 25,2 ГБ | 7,3 ГБ | 32,5 ГБ |
+| DEVICE | pg-global | нет | - | 54,9 млн | 491 | 27,0 ГБ | 5,0 ГБ | 31,9 ГБ |
+| CARD_BY_PAN | pg-global | нет | - | 91 млн | 76 | 6,9 ГБ | 6,8 ГБ | 13,7 ГБ |
+| PRODUCT, CATEGORY, MCC, SBP_BANK | pg-global | нет | - | ~1 350 | 99-153 | < 1 МБ | < 1 МБ | < 1 МБ |
+| **Итого pg-global** | | | | | | **96 ГБ** | **24 ГБ** | **120 ГБ** |
+| SESSION, OTP_CODE, RECIPIENT_LOOKUP | Redis | нет | - | 1,66 млн | 64-200 + ~90 на ключ | | | 0,3 ГБ на ДЦ |
+| EVENT | Kafka | 64 партиции по client_id | - | 323 млн | 387 | | | 125 ГБ, с RF 3 - 375 ГБ |
+| OPERATION_SEARCH | OpenSearch | 128 шардов на индекс, routing = client_id | индекс на год | 111,3 млрд | ~272 на диске | | | 30,3 ТБ, с репликой - 60,6 ТБ |
+| FILE_OBJECT | S3 (Ceph RGW) | распределяет Ceph | - | 164,7 млн | 500 КБ | | | 82,4 ТБ, с EC и копией в ДЦ-2 - 247 ТБ |
+
+### 6.3. Денормализация
+
+Основной функционал выполняется без JOIN: каждый запрос - чтения по ключу в одной БД, а у денежных запросов - в одном шарде.
+
+| Запрос | Пик, QPS | Как выполняется |
+| --- | --- | --- |
+| Проверка сессии | 3 996 | Redis: SESSION по token_hash |
+| Вход | 1 604 | pg-global, мастер: DEVICE по PK → Redis: SESSION |
+| Баланс и список карт | 1 604 | шард клиента: ACCOUNT, CARD, DEPOSIT, LOAN по client_id - префикс PK |
+| Страница ленты | 1 604 | шард: OPERATION WHERE client_id = ? AND id < курсор ORDER BY id DESC LIMIT 20; категории и банки - из справочников в памяти сервиса |
+| Платёж: удержание | 1 406 | pg-global, реплика: CARD_BY_PAN по pan_hash → шард, одна транзакция: CARD по PK, ACCOUNT FOR UPDATE, проверка external_id, INSERT OPERATION, UPDATE ACCOUNT |
+| Платёж: списание | 1 406 | CARD_BY_PAN → шард: OPERATION по external_id, UPDATE OPERATION и ACCOUNT |
+| Определение получателя | 347 | pg-global, реплика: CLIENT по phone → Redis: RECIPIENT_LOOKUP |
+| Исходящий перевод | 347 | Redis: RECIPIENT_LOOKUP → шард отправителя: IDEMPOTENCY_KEY, ACCOUNT, OPERATION; зачисление в шарде получателя (п. 6.6) |
+| Входящий перевод из СБП | 208 | pg-global, реплика: CLIENT по phone → шард получателя |
+| Отправка push | 2 119 | Kafka: EVENT → pg-global, реплика: DEVICE по client_id |
+| Поиск по истории | 76 | OpenSearch с routing = client_id |
+| График платежей | 8,2 | шард: LOAN и LOAN_SCHEDULE по (client_id, loan_id) |
+| Начисление процентов (ночь) | 1 794 | в каждом шарде: DEPOSIT и LOAN по частичным индексам → INSERT INTEREST_ACCRUAL, UPDATE ... WHERE last_accrual_date < сегодня |
+| Списание по графику (ночь) | 33 | в каждом шарде: LOAN_SCHEDULE по частичному индексу (due_date) |
+
+Изменения относительно логической схемы:
+
+| Изменение | Зачем | Почему копии не разойдутся |
+| --- | --- | --- |
+| client_id в OPERATION, CARD, LOAN_SCHEDULE, INTEREST_ACCRUAL | все данные клиента в его шарде и переносятся вместе с бакетом; лента - один запрос по (client_id, id) без JOIN с ACCOUNT | владелец счёта, карты и кредита не меняется |
+| CARD_BY_PAN: pan_hash → client_id, card_id (pan_hash перенесён из CARD) | НСПК присылает номер карты, а не клиента: по нему находится шард | запись неизменяема |
+| CLIENT.default_account_id - копия ACCOUNT.is_default | определение получателя и входящий перевод из СБП без похода в шард, index-only scan по phone | обновляется событием из шарда за секунды; в худшем случае деньги придут на другой счёт того же клиента |
+| RECIPIENT_LOOKUP.recipient_client_id | шард получателя для зачисления | живёт 10 мин |
+| DEPOSIT.last_accrual_date, LOAN.last_accrual_date | повторный запуск ночной задачи не начислит дважды: условие в UPDATE вместо уникального индекса на 23,5 млрд строк (0,9 ТБ) | меняется в одной транзакции с INTEREST_ACCRUAL |
+| Отчёт БКИ - в LOAN_APPLICATION вместо FILE_OBJECT | 60 млн файлов по 10 КБ - проблема мелких файлов для объектного хранилища; читается вместе с заявкой | одна строка |
+| OPERATION без created_at | время в старших битах Snowflake id: сортировка и курсор ленты по id, партиции по диапазонам id | - |
+
+Без денормализации оставлено:
+- справочники (~1 350 строк) не копируются в строки операций: они целиком в памяти сервисов;
+- ACCOUNT, CARD, DEPOSIT и LOAN не склеиваются: экран баланса читает их четырьмя короткими запросами по client_id в одном шарде;
+- имя контрагента, MCC и категория в OPERATION - снимок на момент операции (п. 5), а не копия.
+
+### 6.4. Индексы
+
+Размер = записей x байт на запись / заполнение страницы.
+- B-tree: запись = заголовок 8 Б + ключ с выравниванием до 8 Б + указатель 4 Б. Заполнение 90 %, если ключ растёт (id, время), и около 70 %, если вставка идёт в случайное место (ключ начинается с client_id или хеша).
+- Hash: 20 Б на запись (заголовок 8 Б + хеш 4 Б с выравниванием + указатель 4 Б), заполнение около 75 %.
+- BRIN: одна запись около 32 Б на 128 страниц таблицы.
+
+**pg-core** (на 32 шарда; на шард - 1/32)
+
+| Таблица | Индекс | Тип | Для чего | Записей | Б / заполнение | Размер |
+| --- | --- | --- | --- | --- | --- | --- |
+| OPERATION | PK (client_id, id) | B-tree | лента, скоринг, операции клиента за период | 111,3 млрд | 28 / 0,7 | 4,45 ТБ |
+| OPERATION | (external_id) в 2 последних партициях | Hash | списание находит удержание; повтор сообщения НСПК или СБП не создаёт вторую операцию | 3,2 млрд | 20 / 0,75 | 85 ГБ |
+| OPERATION | (id) WHERE status = hold в 2 последних партициях | B-tree частичный | отмена удержаний старше 30 дней | 81 млн | 20 / 0,9 | 1,8 ГБ |
+| ACCOUNT | PK (client_id, id) | B-tree | баланс, удержание, перевод | 91 млн | 28 / 0,7 | 3,6 ГБ |
+| CARD | PK (client_id, id) | B-tree | список карт, удержание | 91 млн | 28 / 0,7 | 3,6 ГБ |
+| DEPOSIT | PK (client_id, id) | B-tree | баланс, операции по вкладу | 63,8 млн | 28 / 0,7 | 2,6 ГБ |
+| DEPOSIT | (id) WHERE status = active | B-tree частичный | ночное начисление | 5,8 млн | 20 / 0,7 | 0,17 ГБ |
+| LOAN | PK (client_id, id) | B-tree | баланс, график | 18,9 млн | 28 / 0,7 | 0,76 ГБ |
+| LOAN | (id) WHERE status = active | B-tree частичный | ночное начисление | 7,1 млн | 20 / 0,7 | 0,2 ГБ |
+| LOAN_SCHEDULE | PK (client_id, loan_id, number) | B-tree | график платежей | 682 млн | 36 / 0,7 | 35,1 ГБ |
+| LOAN_SCHEDULE | (due_date) WHERE status ≠ paid | B-tree частичный | ночное списание | 128 млн | 20 / 0,7 | 3,7 ГБ |
+| LOAN_APPLICATION | PK (client_id, id) | B-tree | скоринг, выдача | 59,9 млн | 28 / 0,7 | 2,4 ГБ |
+| INTEREST_ACCRUAL | (accrual_date) | BRIN | разбор начислений за дату | 1,8 млн диапазонов | 32 / 1 | 57 МБ |
+| IDEMPOTENCY_KEY | PK (client_id, key) | B-tree | проверка повтора запроса | 10,3 млн | 36 / 0,7 | 0,53 ГБ |
+| IDEMPOTENCY_KEY | (expires_at) | B-tree | удаление ключей старше 24 ч | 10,3 млн | 20 / 0,9 | 0,23 ГБ |
+| **Итого** | | | | | | **4,6 ТБ, 144 ГБ на шард** |
+
+- 97 % индексов pg-core - первичный ключ OPERATION.
+- external_id ищется только на равенство, поэтому Hash: 4 Б хеша вместо 32 Б строки. Индекс держится только на 2 последних месячных партициях: списание приходит в течение 30 дней, повтор сообщения - в течение минут. На всех 60 партициях он занял бы 2,5 ТБ. Уникальность external_id проверяется перед вставкой под блокировкой строки счёта (FOR UPDATE), поэтому повтор не проходит и при параллельных запросах.
+- Для INTEREST_ACCRUAL B-tree не нужен: днём таблица не читается, а строки пишутся строго по возрастанию даты, поэтому BRIN по дате занимает мегабайты вместо 0,9 ТБ.
+
+**pg-global**
+
+| Таблица | Индекс | Тип | Для чего | Записей | Б / заполнение | Размер |
+| --- | --- | --- | --- | --- | --- | --- |
+| CLIENT | PK (id) | B-tree | профиль, скоринг | 54,9 млн | 20 / 0,9 | 1,2 ГБ |
+| CLIENT | UNIQUE (phone) INCLUDE (id, default_account_id) | B-tree уникальный, покрывающий | регистрация, определение получателя, входящий из СБП - index-only scan | 54,9 млн | 44 / 0,7 | 3,5 ГБ |
+| DEVICE | PK (id) | B-tree | вход | 54,9 млн | 20 / 0,9 | 1,2 ГБ |
+| DEVICE | UNIQUE (install_id) | B-tree уникальный | привязка устройства | 54,9 млн | 28 / 0,7 | 2,2 ГБ |
+| DEVICE | (client_id) | B-tree | push на все устройства клиента | 54,9 млн | 20 / 0,7 | 1,6 ГБ |
+| CLIENT_DOCUMENT | PK (id) | B-tree | проверка документа | 164,7 млн | 20 / 0,9 | 3,7 ГБ |
+| CLIENT_DOCUMENT | (client_id) | B-tree | документы клиента | 164,7 млн | 20 / 0,9 | 3,7 ГБ |
+| CARD_BY_PAN | PK (pan_hash) | B-tree уникальный | удержание и списание: карта по номеру | 91 млн | 52 / 0,7 | 6,8 ГБ |
+| Справочники | PK | B-tree | загрузка в память сервисов | ~1 350 | - | < 1 МБ |
+| **Итого** | | | | | | **24 ГБ** |
+
+**Остальные хранилища**
+
+| Хранилище | Таблица | Ключ / поля | Тип индекса | Для чего |
+| --- | --- | --- | --- | --- |
+| Redis | SESSION, OTP_CODE, RECIPIENT_LOOKUP | ключ записи | хеш-таблица Redis, TTL на ключе | чтение по ключу за O(1) |
+| Kafka | EVENT | client_id | партиция = хеш client_id | события клиента идут по порядку |
+| OpenSearch | OPERATION_SEARCH | counterparty_name, comment | инвертированный индекс с русской морфологией | поиск по словам |
+| OpenSearch | OPERATION_SEARCH | amount, created_at | BKD-дерево | фильтр по сумме и периоду |
+| OpenSearch | OPERATION_SEARCH | counterparty_phone, type, status, category_id, card_id | keyword (инвертированный) + doc values | фильтры, сортировка по дате |
+| S3 | FILE_OBJECT | file_key | индекс бакета RGW | фото по ключу |
+
+### 6.5. Выбор СУБД
+
+| Таблицы | СУБД | Почему |
+| --- | --- | --- |
+| ACCOUNT, CARD, OPERATION, DEPOSIT, LOAN, LOAN_SCHEDULE, LOAN_APPLICATION, INTEREST_ACCRUAL, IDEMPOTENCY_KEY | PostgreSQL 17, шардированный (pg-core) | ACID-транзакция «остаток + операция + ключ идемпотентности» и строгая консистентность (п. 5.4); партиционирование; восстановление на любую секунду по WAL; проверен на больших объёмах. Cassandra и ScyllaDB не подходят: нет транзакций между строками разных партиций |
+| CLIENT, DEVICE, CLIENT_DOCUMENT, CARD_BY_PAN, справочники | PostgreSQL 17 без шардирования (pg-global) | 120 ГБ, запись около 5 в секунду; уникальность телефона и номера карты обеспечивает один инстанс |
+| SESSION, OTP_CODE, RECIPIENT_LOOKUP | Redis | ключ-значение с TTL, атомарный счётчик попыток; потеря данных означает только повторный вход или повтор действия |
+| EVENT | Kafka | поток изменений с хранением 3 сут, несколько независимых читателей (push, поиск, переводы), порядок внутри клиента |
+| OPERATION_SEARCH | OpenSearch | полнотекстовый поиск с русской морфологией и фильтрами; данные производные, восстанавливаются из PostgreSQL |
+| FILE_OBJECT (фото документов) | S3 на Ceph RGW в своих ДЦ | 82 ТБ неизменяемых объектов по 500 КБ, 2,5 записи в секунду; отдельный кластер, другие системы его не нагружают |
+| Отчёты БКИ | PostgreSQL, TOAST в LOAN_APPLICATION | 60 млн файлов по 10 КБ - для объектного хранилища это проблема мелких файлов |
+
+### 6.6. Шардирование и резервирование
+
+**Ключ шардирования pg-core - client_id.** Почти все запросы адресованы одному клиенту (п. 5.4), клиентов 54,9 млн, поэтому распределение равномерное. Все строки одной денежной транзакции (счёт, операция, ключ идемпотентности) лежат в одном шарде.
+
+**Маршрутизация.** 1 024 бакета, бакет - младшие 10 бит client_id. Таблица «бакет → шард» хранится в etcd, сервисы держат её копию в памяти. При регистрации client_id получает бакет из шардов, мастер которых в ДЦ региона клиента: ДЦ-1 - 12 шардов, ДЦ-2 и ДЦ-3 - по 10, пропорционально нагрузке (п. 3.3). Перешардирование - перенос бакета на новый шард логической репликацией и замена строки в таблице, id не меняются.
+
+**Число шардов.** Шардируем из-за объёма, а не нагрузки. 48,4 ТБ данных и 4,6 ТБ индексов не помещаются в одну машину. При этом нагрузка на шард при 32 шардах в пике всего 238 записей и 344 чтения в секунду. Критерий: индексы шарда вместе с горячими данными (2 последних месяца OPERATION и небольшие таблицы) помещаются в RAM узла 256 ГБ.
+
+| Шардов | Данные на шард | Индексы на шард | Горячие данные | Индексы + горячие | В 256 ГБ |
+| --- | --- | --- | --- | --- | --- |
+| 16 | 2,7 ТБ | 287 ГБ | 90 ГБ | 377 ГБ | нет |
+| **32** | **1,4 ТБ** | **144 ГБ** | **45 ГБ** | **188 ГБ** | **да, запас 27 %** |
+| 64 | 0,7 ТБ | 72 ГБ | 22 ГБ | 94 ГБ | да, но серверов вдвое больше |
+
+Узел шарда: 256 ГБ RAM, 2 x 3,84 ТБ NVMe в RAID 1.
+
+**Партиционирование OPERATION** по месяцам (RANGE по Snowflake id), 60 партиций плюс следующая, созданная заранее:
+- текущая партиция (21,6 ГБ на шард) целиком в памяти, старые лежат на диске;
+- по истечении 5 лет выполняется DROP партиции вместо удаления 1,9 млрд строк;
+- hash-индекс и частичный индекс есть только на 2 последних партициях;
+- закрытые партиции больше не меняются и архивируются один раз (п. 6.9).
+
+INTEREST_ACCRUAL партиционирована так же, по месяцам: в неё только вставляют, старые месяцы днём не читаются.
+
+**Перевод между шардами** - сага через Kafka без распределённых транзакций:
+1. шард отправителя, одна транзакция: IDEMPOTENCY_KEY, списание, OPERATION «в обработке»;
+2. событие из CDC → сервис переводов → шард получателя: зачисление и OPERATION с external_id = id операции отправителя, повтор события не зачислит дважды;
+3. шард отправителя: статус «проведена». Если зачислить нельзя - возврат и статус «отменена».
+
+Деньги сначала списываются, потом зачисляются, поэтому из ниоткуда не появляются; получатель видит их через доли секунды.
+
+**Резервирование по таблицам**
+
+| Таблицы | БД | Шардирование | Резервирование |
+| --- | --- | --- | --- |
+| OPERATION, ACCOUNT, CARD, DEPOSIT, LOAN, LOAN_SCHEDULE, LOAN_APPLICATION, INTEREST_ACCRUAL, IDEMPOTENCY_KEY | pg-core | 32 шарда по client_id | в шарде 3 узла в ДЦ-1/2/3, мастер в ДЦ своих клиентов. Синхронная репликация по кворуму ANY 1 из 2: коммит ждёт ближайший другой ДЦ (+9-23 мс). Patroni и etcd переключают мастер за ~30 с. Плюс отложенная на 4 ч реплика |
+| CLIENT, DEVICE, CLIENT_DOCUMENT, CARD_BY_PAN, справочники | pg-global | нет: 120 ГБ, ~7 тыс. чтений в секунду берут реплики | 3 узла в ДЦ-1/2/3, синхронная репликация по кворуму, Patroni. Маршрутные чтения (CARD_BY_PAN, phone, push-токены) идут на реплику своего ДЦ. Плюс отложенная реплика |
+| SESSION, OTP_CODE, RECIPIENT_LOOKUP | Redis | нет: 0,3 ГБ | в каждом ДЦ master + replica, Sentinel; между ДЦ не реплицируется (п. 5.4) |
+| EVENT | Kafka | 64 партиции по client_id | RF 3 - по копии в каждом ДЦ, min.insync.replicas 2 |
+| OPERATION_SEARCH | OpenSearch | годовые индексы по 128 шардов (~47 ГБ), routing = client_id | 1 реплика, копии шарда в разных ДЦ (awareness) |
+| FILE_OBJECT | S3 (Ceph) | распределяет Ceph | EC 4+2 внутри ДЦ, асинхронная копия из ДЦ-1 в ДЦ-2 |
+
+Серверов PostgreSQL: 32 x 3 + 3 = 99 и ещё 9 под отложенные реплики (по 4 на сервер).
+
+### 6.7. Клиентские библиотеки и интеграции
+
+Сервисы написаны на Go.
+
+| Хранилище | Библиотека | Как используется |
+| --- | --- | --- |
+| PostgreSQL | jackc/pgx v5 (pgxpool) | бинарный протокол, пул соединений в поде, подготовленные запросы |
+| PostgreSQL, шарды | своя библиотека-роутер поверх pgx, etcd client v3 | client_id → бакет → шард по таблице из etcd; изменения таблицы приходят через watch |
+| Redis | redis/go-redis v9 | клиент Sentinel (NewFailoverClient) сам находит мастер |
+| Kafka | twmb/franz-go | идемпотентный продюсер, группы потребителей |
+| OpenSearch | opensearch-project/opensearch-go v4 | bulk-индексация, поиск с routing |
+| S3 | aws-sdk-go-v2 (s3) | Ceph RGW совместим с S3 API |
+
+Интеграции:
+- PostgreSQL → Kafka: Debezium (Kafka Connect) читает WAL каждого шарда и пишет изменения OPERATION и LOAN_APPLICATION в топик events. Событие появляется только после коммита и не теряется. Слот репликации переживает переключение мастера (failover-слоты PostgreSQL 17);
+- Kafka → OpenSearch: индексатор пишет OPERATION_SEARCH пачками (bulk);
+- Kafka → push-сервис: читает события, берёт push-токены из DEVICE и отправляет в APNs/FCM;
+- Kafka → сервис переводов: зачисление при переводе между шардами (п. 6.6);
+- pg-global → сервисы: справочники загружаются в память при старте и обновляются раз в 5 минут;
+- WAL-G → S3 бэкапов (п. 6.9).
+
+### 6.8. Балансировка запросов и мультиплексирование подключений
+
+**PostgreSQL:** под (pgxpool) → PgBouncer на узлах-пулерах (2 на ДЦ, п. 4.1) → HAProxy на том же узле → мастер или реплика шарда.
+- PgBouncer работает в режиме transaction pooling. Тысячи соединений от подов он сводит к 8 соединениям с каждого узла-пулера на шард, всего не больше 48 соединений к мастеру шарда от 6 узлов. PgBouncer с версии 1.21 поддерживает в этом режиме подготовленные запросы pgx.
+- HAProxy находит мастер по REST API Patroni (проверка /primary раз в 2 с). После переключения соединения уходят на новый мастер без перенастройки сервисов. На реплики (проверка /replica) идут только чтения из pg-global и только в своём ДЦ.
+- Запрос клиента выполняется в ДЦ, где мастер его шарда. Клиентский API попадает туда по GeoDNS, потому что бакет выбран по региону. Межбанковские сообщения передаются туда из ДЦ-1 и ДЦ-2 по межДЦ-каналам (п. 3.3).
+
+**Redis:** go-redis держит пул соединений к мастеру своего ДЦ, адрес мастера узнаёт у Sentinel. Прокси не нужен: около 6 тыс. операций в секунду.
+
+**Kafka:** продюсеры и потребители ходят напрямую к лидерам партиций. Нагрузку распределяет размещение 64 партиций по брокерам и между потребителями группы.
+
+**OpenSearch:** клиент по кругу обращается к координирующим узлам своего ДЦ. Поиск с routing = client_id попадает в один шард каждого годового индекса.
+
+**S3:** узлы Ceph RGW не хранят состояния, запросы между ними распределяет ingress NGINX (п. 4).
+
+### 6.9. Схема резервного копирования
+
+| Эшелон | Как сделано | От чего защищает | Потеря данных | Время восстановления |
+| --- | --- | --- | --- | --- |
+| Горячий резерв | синхронные реплики в двух других ДЦ, Patroni | отказ узла или ДЦ | 0 | ~30 с |
+| Отложенная реплика | по одной на шард, recovery_min_apply_delay = 4 ч | ошибочный UPDATE или DELETE, замеченный в течение 4 ч | 0 | минуты: строки берутся с реплики, остановленной до ошибки |
+| Бэкап + WAL | WAL-G с реплики: полный бэкап раз в неделю, дельта раз в сутки, WAL непрерывно; хранение 35 сут | ошибка, замеченная в течение месяца | восстановление на любую секунду | около часа на шард (1,5 ТБ) |
+| Холодный архив | закрытые месячные партиции OPERATION и INTEREST_ACCRUAL (старше 2 месяцев) - pg_dump раз в месяц, хранение 5 лет | потеря старых данных после 35 сут, срок хранения 5 лет | 0 для закрытых месяцев | часы |
+
+| БД | Что делаем | Объём |
+| --- | --- | --- |
+| pg-core | эшелоны выше; бэкапы сжаты и зашифрованы, лежат в отдельном S3-кластере бэкапов с копией во втором ДЦ | полный бэкап ~16 ТБ (сжатие в 3 раза), 5 полных - 81 ТБ; WAL ~3 КБ на финансовую операцию, 107 ГБ в сутки после сжатия, 3,8 ТБ за 35 сут; архив партиций ~0,24 ТБ в месяц, 14,5 ТБ за 5 лет |
+| pg-global | отложенная реплика; WAL-G: полный бэкап ежедневно, WAL непрерывно, хранение 35 сут | ~40 ГБ на полный бэкап |
+| Redis | не бэкапится: TTL не больше 15 мин, потеря означает повторный вход или повтор действия | - |
+| Kafka | не бэкапится: RF 3, источник данных - PostgreSQL | - |
+| OpenSearch | инкрементальный снапшот в S3 раз в сутки, хранится 7 снапшотов | ~30 ТБ первый, дальше только новые сегменты |
+| S3, фото | версионирование: удалённые и перезаписанные версии хранятся 35 сут; копия в ДЦ-2 | - |
+
+Пример восстановления: ошибочно удалили операции у 1 % клиентов и заметили через месяц.
+1. По client_id находим бакеты и шарды. 1 % клиентов есть во всех 32 шардах.
+2. Каждый шард параллельно восстанавливаем из бэкапа на отдельный инстанс на момент перед ошибкой (recovery_target_time), около часа.
+3. Выбираем строки этих клиентов и вставляем обратно в боевые шарды, остатки сверяем с операциями.
+
+Если ошибку заметили позже 35 сут, операции берутся из архива месячных партиций.
+
 
 ## Список источников
 
