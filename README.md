@@ -862,20 +862,20 @@ erDiagram
 ```mermaid
 %%{init: {"flowchart": {"wrappingWidth": 420, "nodeSpacing": 25, "rankSpacing": 45}}}%%
 flowchart TB
-  subgraph CORE["mongo-core: MongoDB 8.0, шардированные коллекции, 64 шарда, ключ (bucket, client_id), зоны по ДЦ; шард - replica set из 3 членов в ДЦ-1/2/3 + скрытый отложенный"]
+  subgraph CORE["mongo-core: MongoDB 8.0, шардированные коллекции, 64 шарда, ключ шардирования client_id, зоны - диапазоны client_id; шард - replica set из 3 членов в ДЦ-1/2/3 + скрытый отложенный"]
     direction LR
-    ACCOUNT["<b>ACCOUNT</b> · коллекция accounts<br/>────────<br/>_id<br/>(bucket, client_id, _id) - ключ шардирования<br/>────────<br/>_id int64<br/>bucket int32<br/>client_id int64<br/>number string(20)<br/>currency string(3)<br/>balance int64<br/>hold_amount int64<br/>is_default bool<br/>status int32<br/>opened_at date<br/>closed_at date<br/>updated_at date"]
-    CARD["<b>CARD</b> · коллекция cards<br/>────────<br/>_id<br/>(bucket, client_id, _id) - ключ шардирования<br/>────────<br/>_id int64<br/>bucket int32<br/>client_id int64<br/>account_id int64<br/>pan_masked string(16)<br/>expiry date<br/>payment_system int32<br/>type int32<br/>status int32<br/>issued_at date<br/>updated_at date"]
-    OPERATION["<b>OPERATION</b> · коллекции operations_ГГГГММ, по одной на месяц<br/>────────<br/>_id<br/>(bucket, client_id, _id ↓) - ключ шардирования<br/>(bucket, client_id, account_id, _id ↓)<br/>(bucket, client_id, card_id, _id ↓) частичный<br/>(bucket, client_id, deposit_id, _id ↓) частичный<br/>(bucket, client_id, loan_id, _id ↓) частичный<br/>(bucket, client_id, external_id) уникальный частичный, 2 последних месяца<br/>(status, _id) частичный: status = hold, 2 последних месяца<br/>────────<br/>_id int64 Snowflake, в нём время создания<br/>bucket int32<br/>client_id int64<br/>account_id int64<br/>card_id int64<br/>deposit_id int64<br/>loan_id int64<br/>linked_operation_id int64<br/>type int32<br/>status int32<br/>amount int64<br/>hold_amount int64<br/>currency string(3)<br/>mcc int32<br/>category_id int32<br/>counterparty_name string(64)<br/>counterparty_phone string(16)<br/>counterparty_bank_id int32<br/>comment string(140)<br/>external_id string(32)<br/>updated_at date"]
-    IDEMPOTENCY_KEY["<b>IDEMPOTENCY_KEY</b> · коллекция idempotency_keys<br/>────────<br/>_id<br/>(bucket, client_id, key) уникальный, ключ шардирования<br/>(expires_at) TTL 24 ч<br/>────────<br/>_id int64<br/>bucket int32<br/>client_id int64<br/>key binData(16)<br/>request_hash binData(32)<br/>status int32<br/>result_id int64<br/>expires_at date"]
-    DEPOSIT["<b>DEPOSIT</b> · коллекция deposits<br/>────────<br/>_id<br/>(bucket, client_id, _id) - ключ шардирования<br/>(status, _id) частичный: status = active<br/>────────<br/>_id int64<br/>bucket int32<br/>client_id int64<br/>account_id int64<br/>product_id int32<br/>contract_number string(20)<br/>deposit_account_number string(20)<br/>rate decimal128<br/>balance int64<br/>accrued_interest int64<br/>last_accrual_date date<br/>opened_at date<br/>maturity_date date<br/>closed_at date<br/>status int32<br/>updated_at date"]
-    LOAN["<b>LOAN</b> · коллекция loans<br/>────────<br/>_id<br/>(bucket, client_id, _id) - ключ шардирования<br/>(status, _id) частичный: status = active<br/>────────<br/>_id int64<br/>bucket int32<br/>client_id int64<br/>account_id int64<br/>application_id int64<br/>contract_number string(20)<br/>loan_account_number string(20)<br/>amount int64<br/>rate decimal128<br/>term_months int32<br/>monthly_payment int64<br/>principal_debt int64<br/>interest_debt int64<br/>last_accrual_date date<br/>issued_at date<br/>closed_at date<br/>status int32<br/>updated_at date"]
-    INTEREST_ACCRUAL["<b>INTEREST_ACCRUAL</b> · коллекция accruals, документ на продукт и месяц<br/>────────<br/>_id<br/>(bucket, client_id, product_id, month) уникальный, ключ шардирования<br/>(month) TTL 5 лет<br/>────────<br/>_id int64<br/>bucket int32<br/>client_id int64<br/>product_kind int32: вклад или кредит<br/>product_id int64<br/>month date<br/>days: массив до 31 элемента<br/>  day int32, base_amount int64,<br/>  rate decimal128, amount int64"]
+    ACCOUNT["<b>ACCOUNT</b> · коллекция accounts<br/>────────<br/>_id<br/>(client_id, _id) - индекс ключа шардирования<br/>────────<br/>_id int64<br/>client_id int64 - ключ шардирования<br/>number string(20)<br/>currency string(3)<br/>balance int64<br/>hold_amount int64<br/>is_default bool<br/>status int32<br/>opened_at date<br/>closed_at date<br/>updated_at date"]
+    CARD["<b>CARD</b> · коллекция cards<br/>────────<br/>_id<br/>(client_id, _id) - индекс ключа шардирования<br/>────────<br/>_id int64<br/>client_id int64 - ключ шардирования<br/>account_id int64<br/>pan_masked string(16)<br/>expiry date<br/>payment_system int32<br/>type int32<br/>status int32<br/>issued_at date<br/>updated_at date"]
+    OPERATION["<b>OPERATION</b> · коллекции operations_ГГГГММ, по одной на месяц<br/>────────<br/>_id<br/>(client_id, _id ↓) - индекс ключа шардирования<br/>(client_id, account_id, _id ↓)<br/>(client_id, card_id, _id ↓) частичный<br/>(client_id, deposit_id, _id ↓) частичный<br/>(client_id, loan_id, _id ↓) частичный<br/>(client_id, external_id) уникальный частичный, 2 последних месяца<br/>(status, _id) частичный: status = hold, 2 последних месяца<br/>────────<br/>_id int64 Snowflake, в нём время создания<br/>client_id int64 - ключ шардирования<br/>account_id int64<br/>card_id int64<br/>deposit_id int64<br/>loan_id int64<br/>linked_operation_id int64<br/>type int32<br/>status int32<br/>amount int64<br/>hold_amount int64<br/>currency string(3)<br/>mcc int32<br/>category_id int32<br/>counterparty_name string(64)<br/>counterparty_phone string(16)<br/>counterparty_bank_id int32<br/>comment string(140)<br/>external_id string(32)<br/>updated_at date"]
+    IDEMPOTENCY_KEY["<b>IDEMPOTENCY_KEY</b> · коллекция idempotency_keys<br/>────────<br/>_id<br/>(client_id, key) уникальный, индекс ключа шардирования<br/>(expires_at) TTL 24 ч<br/>────────<br/>_id int64<br/>client_id int64 - ключ шардирования<br/>key binData(16)<br/>request_hash binData(32)<br/>status int32<br/>result_id int64<br/>expires_at date"]
+    DEPOSIT["<b>DEPOSIT</b> · коллекция deposits<br/>────────<br/>_id<br/>(client_id, _id) - индекс ключа шардирования<br/>(status, _id) частичный: status = active<br/>────────<br/>_id int64<br/>client_id int64 - ключ шардирования<br/>account_id int64<br/>product_id int32<br/>contract_number string(20)<br/>deposit_account_number string(20)<br/>rate decimal128<br/>balance int64<br/>accrued_interest int64<br/>last_accrual_date date<br/>opened_at date<br/>maturity_date date<br/>closed_at date<br/>status int32<br/>updated_at date"]
+    LOAN["<b>LOAN</b> · коллекция loans<br/>────────<br/>_id<br/>(client_id, _id) - индекс ключа шардирования<br/>(status, _id) частичный: status = active<br/>────────<br/>_id int64<br/>client_id int64 - ключ шардирования<br/>account_id int64<br/>application_id int64<br/>contract_number string(20)<br/>loan_account_number string(20)<br/>amount int64<br/>rate decimal128<br/>term_months int32<br/>monthly_payment int64<br/>principal_debt int64<br/>interest_debt int64<br/>last_accrual_date date<br/>issued_at date<br/>closed_at date<br/>status int32<br/>updated_at date"]
+    INTEREST_ACCRUAL["<b>INTEREST_ACCRUAL</b> · коллекция accruals, документ на продукт и месяц<br/>────────<br/>_id<br/>(client_id, product_id, month) уникальный, индекс ключа шардирования<br/>(month) TTL 5 лет<br/>────────<br/>_id int64<br/>client_id int64 - ключ шардирования<br/>product_kind int32: вклад или кредит<br/>product_id int64<br/>month date<br/>days: массив до 31 элемента<br/>  day int32, base_amount int64,<br/>  rate decimal128, amount int64"]
   end
 
   subgraph GLOBAL["mongo-global: тот же кластер MongoDB, нешардированные коллекции на отдельном шарде - replica set из 3 членов в ДЦ-1/2/3 + скрытый отложенный"]
     direction LR
-    CLIENT["<b>CLIENT</b> · коллекция clients<br/>────────<br/>_id = client_id<br/>(phone) уникальный<br/>────────<br/>_id int64, младшие 10 бит - bucket<br/>phone string(16)<br/>last_name string(64)<br/>first_name string(64)<br/>middle_name string(64)<br/>birth_date date<br/>passport_number string(10)<br/>passport_issued_at date<br/>passport_issuer_code string(7)<br/>passport_issued_by string(128)<br/>registration_address string(256)<br/>default_account_id int64<br/>status int32<br/>created_at date<br/>updated_at date"]
+    CLIENT["<b>CLIENT</b> · коллекция clients<br/>────────<br/>_id = client_id<br/>(phone) уникальный<br/>────────<br/>_id int64 = client_id, старшие 10 бит - группа шардов<br/>phone string(16)<br/>last_name string(64)<br/>first_name string(64)<br/>middle_name string(64)<br/>birth_date date<br/>passport_number string(10)<br/>passport_issued_at date<br/>passport_issuer_code string(7)<br/>passport_issued_by string(128)<br/>registration_address string(256)<br/>default_account_id int64<br/>status int32<br/>created_at date<br/>updated_at date"]
     CARD_BY_PAN["<b>CARD_BY_PAN</b> · коллекция card_by_pan<br/>────────<br/>_id = pan_hash<br/>────────<br/>_id binData(32): pan_hash<br/>client_id int64<br/>card_id int64"]
     DEVICE["<b>DEVICE</b> · коллекция devices<br/>────────<br/>_id<br/>(install_id) уникальный<br/>(client_id)<br/>────────<br/>_id int64<br/>client_id int64<br/>install_id binData(16)<br/>platform int32<br/>push_token string(256)<br/>pin_hash binData(64)<br/>biometric_public_key binData(91)<br/>failed_pin_attempts int32<br/>status int32<br/>created_at date<br/>updated_at date"]
     CLIENT_DOCUMENT["<b>CLIENT_DOCUMENT</b> · коллекция client_documents<br/>────────<br/>_id<br/>(client_id)<br/>────────<br/>_id int64<br/>client_id int64<br/>type int32<br/>file_key string(64)<br/>size_bytes int32<br/>sha256 binData(32)<br/>uploaded_at date"]
@@ -915,7 +915,7 @@ flowchart TB
 
   CLIENT -->|client_id| DEVICE
   CLIENT -->|client_id| CLIENT_DOCUMENT
-  CLIENT -->|"client_id → bucket → зона → шард"| ACCOUNT
+  CLIENT -->|"client_id → зона → шард"| ACCOUNT
   CARD_BY_PAN -->|"client_id, card_id"| CARD
   CLIENT_DOCUMENT -.->|file_key| FILE_OBJECT
   SESSION -.->|device_id| DEVICE
@@ -929,14 +929,14 @@ flowchart TB
 
 | Таблица (коллекция) | БД | Шардирование | Партиции | Документов | Документ BSON / на диске, Б | Данные | Индексы | Всего |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| OPERATION (operations_ГГГГММ) | mongo-core | (bucket, client_id), 64 шарда | коллекция на месяц, 60 | 111,3 млрд | 634 / 317 | 35,3 ТБ | 10,1 ТБ | 45,4 ТБ |
-| INTEREST_ACCRUAL (accruals) | mongo-core | (bucket, client_id) | - | 774 млн: продукт x месяц | 2 454 / 1 227 | 950 ГБ | 52 ГБ | 1,0 ТБ |
-| ACCOUNT (accounts) | mongo-core | (bucket, client_id) | - | 91 млн | 221 / 110 | 10,1 ГБ | 4,0 ГБ | 14,0 ГБ |
-| DEPOSIT (deposits) | mongo-core | (bucket, client_id) | - | 63,8 млн | 361 / 180 | 11,5 ГБ | 2,9 ГБ | 14,4 ГБ |
-| CARD (cards) | mongo-core | (bucket, client_id) | - | 91 млн | 199 / 100 | 9,1 ГБ | 4,0 ГБ | 13,0 ГБ |
-| LOAN (loans) | mongo-core | (bucket, client_id) | - | 18,9 млн | 405 / 202 | 3,8 ГБ | 0,9 ГБ | 4,8 ГБ |
-| IDEMPOTENCY_KEY (idempotency_keys) | mongo-core | (bucket, client_id) | - | 10,3 млн | 177 / 88 | 0,9 ГБ | 0,8 ГБ | 1,7 ГБ |
-| **Итого mongo-core** | | | | | | **36,3 ТБ** | **10,2 ТБ** | **46,5 ТБ** |
+| OPERATION (operations_ГГГГММ) | mongo-core | client_id, 64 шарда | коллекция на месяц, 60 | 111,3 млрд | 622 / 311 | 34,6 ТБ | 10,1 ТБ | 44,8 ТБ |
+| INTEREST_ACCRUAL (accruals) | mongo-core | client_id | - | 774 млн: продукт x месяц | 2 442 / 1 221 | 945 ГБ | 52 ГБ | 1,0 ТБ |
+| ACCOUNT (accounts) | mongo-core | client_id | - | 91 млн | 209 / 104 | 9,5 ГБ | 4,0 ГБ | 13,5 ГБ |
+| DEPOSIT (deposits) | mongo-core | client_id | - | 63,8 млн | 349 / 174 | 11,1 ГБ | 2,9 ГБ | 14,0 ГБ |
+| CARD (cards) | mongo-core | client_id | - | 91 млн | 187 / 94 | 8,5 ГБ | 4,0 ГБ | 12,5 ГБ |
+| LOAN (loans) | mongo-core | client_id | - | 18,9 млн | 393 / 196 | 3,7 ГБ | 0,9 ГБ | 4,7 ГБ |
+| IDEMPOTENCY_KEY (idempotency_keys) | mongo-core | client_id | - | 10,3 млн | 165 / 82 | 0,9 ГБ | 0,8 ГБ | 1,6 ГБ |
+| **Итого mongo-core** | | | | | | **35,6 ТБ** | **10,2 ТБ** | **45,8 ТБ** |
 | LOAN_APPLICATION (loan_applications) | mongo-global | нет | - | 59,9 млн | 343 / 172 + отчёт БКИ ~4 КБ | 250 ГБ | 3,1 ГБ | 253 ГБ |
 | LOAN_SCHEDULE (loan_schedule) | mongo-global | нет | - | 682 млн | 206 / 103 | 70,2 ГБ | 26,4 ГБ | 96,7 ГБ |
 | CLIENT (clients) | mongo-global | нет | - | 54,9 млн | 919 / 460 | 25,2 ГБ | 2,4 ГБ | 27,6 ГБ |
@@ -958,11 +958,11 @@ flowchart TB
 | --- | --- | --- |
 | Проверка сессии | 3 996 | Redis: SESSION по token_hash |
 | Вход | 1 604 | mongo-global, primary: devices по _id → Redis: SESSION |
-| Баланс и список карт | 1 604 | шард клиента: accounts, cards, deposits, loans по (bucket, client_id) |
-| Страница ленты | 1 604 | шард: operations текущего месяца по (bucket, client_id, _id < курсор), сортировка по _id ↓, 20 документов; если меньше - прошлый месяц. Категории и банки - из справочников в памяти сервиса |
+| Баланс и список карт | 1 604 | шард клиента: accounts, cards, deposits, loans по client_id |
+| Страница ленты | 1 604 | шард: operations текущего месяца по (client_id, _id < курсор), сортировка по _id ↓, 20 документов; если меньше - прошлый месяц. Категории и банки - из справочников в памяти сервиса |
 | Операции по счёту, карте, вкладу, кредиту | входит в 76 | шард: operations по составному индексу продукта, месяцы от нового к старому |
 | Платёж: удержание | 1 406 | mongo-global, ближайший член: card_by_pan по _id → шард, одна транзакция: cards и accounts по ключу, проверка external_id, вставка в operations, обновление accounts |
-| Платёж: списание | 1 406 | card_by_pan → шард, транзакция: operations по (bucket, client_id, external_id), обновление operations и accounts |
+| Платёж: списание | 1 406 | card_by_pan → шард, транзакция: operations по (client_id, external_id), обновление operations и accounts |
 | Определение получателя | 347 | mongo-global, ближайший член: clients по phone → Redis: RECIPIENT_LOOKUP |
 | Исходящий перевод | 347 | Redis: RECIPIENT_LOOKUP → транзакция: idempotency_keys, accounts и operations отправителя и получателя; разные шарды - распределённая транзакция (п. 6.6) |
 | Входящий перевод из СБП | 208 | clients по phone → шард получателя |
@@ -976,7 +976,7 @@ flowchart TB
 
 | Изменение | Зачем | Почему копии не разойдутся |
 | --- | --- | --- |
-| client_id и bucket в operations, cards, accruals; bucket во всех шардированных коллекциях | данные клиента лежат в его шарде; bucket (младшие 10 бит client_id) - первое поле ключа шардирования, по нему заданы зоны; лента - один запрос без JOIN с accounts | владелец счёта, карты и кредита не меняется, bucket вычисляется из client_id |
+| client_id в operations, cards, accruals | client_id - ключ шардирования: все данные клиента лежат в его шарде; лента - один запрос без JOIN с accounts | владелец счёта, карты и кредита не меняется |
 | CARD_BY_PAN: pan_hash → client_id, card_id (pan_hash перенесён из cards) | НСПК присылает номер карты, а не клиента: по нему находится шард | документ неизменяем |
 | clients.default_account_id - копия accounts.is_default | определение получателя и входящий перевод из СБП без похода в шард | обновляется событием из шарда за секунды; в худшем случае деньги придут на другой счёт того же клиента |
 | RECIPIENT_LOOKUP.recipient_client_id | шард получателя для зачисления | живёт 10 мин |
@@ -992,11 +992,21 @@ flowchart TB
 
 ### 6.4. Индексы
 
-Под каждый запрос к операциям - свой индекс. Все индексы шардированных коллекций начинаются с (bucket, client_id): запрос идёт в один шард, а индекс в нём локальный. Индекс по _id в MongoDB обязателен в каждой коллекции.
+Под каждый запрос к операциям - свой индекс. Ключ шардирования всех шардированных коллекций - client_id (п. 6.6). Каждый запрос от клиента содержит client_id, поэтому mongos отправляет его в один шард, и там работает индекс, начинающийся с client_id. Индексы, которые начинаются не с client_id, используют только:
+- обязательный индекс _id: он есть в каждой коллекции MongoDB, а поиск операции всегда идёт вместе с client_id;
+- частичные индексы ночных задач (status, _id): задача запускается на каждом шарде и обходит только его данные.
+
+| Коллекция | Ключ шардирования | Индекс ключа шардирования |
+| --- | --- | --- |
+| operations_ГГГГММ | client_id | (client_id, _id ↓) |
+| accruals | client_id | (client_id, product_id, month), уникальный |
+| accounts, cards, deposits, loans | client_id | (client_id, _id) |
+| idempotency_keys | client_id | (client_id, key), уникальный |
+| clients, devices, client_documents, card_by_pan, loan_applications, loan_schedule, справочники | нет, коллекции на шарде mongo-global | - |
 
 Размер = записей x байт на запись / заполнение страницы. Индекс WiredTiger - B-дерево:
 - запись = ключ в формате KeyString (int64 и дата - около 9 Б, int32 - около 3 Б, строка - длина + 2 Б, binData - длина + 3 Б) + RecordId 8 Б + 2 Б служебных;
-- префиксное сжатие индексов включено по умолчанию: общий с соседней записью префикс хранится один раз. В индексах, начинающихся с (bucket, client_id), соседние записи почти всегда одного клиента, поэтому эти 12 Б не повторяются;
+- префиксное сжатие индексов включено по умолчанию: общий с соседней записью префикс хранится один раз. В индексах, начинающихся с client_id, соседние записи почти всегда одного клиента, поэтому эти 9 Б не повторяются;
 - заполнение страниц - 90 %, если ключ растёт (_id, дата), и около 70 %, если вставка идёт в случайное место.
 
 **mongo-core** (на 64 шарда; на шард - 1/64)
@@ -1004,23 +1014,23 @@ flowchart TB
 | Коллекция | Индекс | Тип | Для чего | Записей | Б (полная - общий префикс) / заполнение | Размер |
 | --- | --- | --- | --- | --- | --- | --- |
 | operations | _id | _id, уникальный | обязательный; операция по id | 111,3 млрд | (19 - 4) / 0,9 = 16,7 | 1,86 ТБ |
-| operations | (bucket, client_id, _id ↓) | составной, ключ шардирования | лента, скоринг, операции клиента за период | 111,3 млрд | (31 - 12) / 0,7 = 27,1 | 3,02 ТБ |
-| operations | (bucket, client_id, account_id, _id ↓) | составной | выписка по счёту | 111,3 млрд | (40 - 21) / 0,7 = 27,1 | 3,02 ТБ |
-| operations | (bucket, client_id, card_id, _id ↓), где card_id есть | составной частичный | операции по карте | 73,9 млрд | 27,1 | 2,01 ТБ |
-| operations | (bucket, client_id, deposit_id, _id ↓), где deposit_id есть | составной частичный | операции по вкладу | 473 млн | 27,1 | 12,8 ГБ |
-| operations | (bucket, client_id, loan_id, _id ↓), где loan_id есть | составной частичный | операции по кредиту | 446 млн | 27,1 | 12,1 ГБ |
-| operations | (bucket, client_id, external_id), где external_id есть; 2 последних месяца | уникальный частичный | списание находит удержание; повтор сообщения НСПК или СБП отклоняется | 3,2 млрд | (56 - 12) / 0,7 = 62,9 | 201 ГБ |
+| operations | (client_id, _id ↓) | составной, индекс ключа шардирования | лента, скоринг, операции клиента за период | 111,3 млрд | (28 - 9) / 0,7 = 27,1 | 3,02 ТБ |
+| operations | (client_id, account_id, _id ↓) | составной | выписка по счёту | 111,3 млрд | (37 - 18) / 0,7 = 27,1 | 3,02 ТБ |
+| operations | (client_id, card_id, _id ↓), где card_id есть | составной частичный | операции по карте | 73,9 млрд | 27,1 | 2,01 ТБ |
+| operations | (client_id, deposit_id, _id ↓), где deposit_id есть | составной частичный | операции по вкладу | 473 млн | 27,1 | 12,8 ГБ |
+| operations | (client_id, loan_id, _id ↓), где loan_id есть | составной частичный | операции по кредиту | 446 млн | 27,1 | 12,1 ГБ |
+| operations | (client_id, external_id), где external_id есть; 2 последних месяца | уникальный частичный | списание находит удержание; повтор сообщения НСПК или СБП отклоняется | 3,2 млрд | (53 - 9) / 0,7 = 62,9 | 201 ГБ |
 | operations | (status, _id), где status = hold; 2 последних месяца | частичный | отмена удержаний старше 30 дней | 81 млн | (22 - 7) / 0,9 = 16,7 | 1,4 ГБ |
 | accruals | _id | _id, уникальный | обязательный | 774 млн | 16,7 | 12,9 ГБ |
-| accruals | (bucket, client_id, product_id, month) | уникальный, ключ шардирования | дописать день в документ месяца; разбор начислений | 774 млн | (40 - 12) / 0,7 = 40 | 31 ГБ |
+| accruals | (client_id, product_id, month) | уникальный, индекс ключа шардирования | дописать день в документ месяца; разбор начислений | 774 млн | (37 - 9) / 0,7 = 40 | 31 ГБ |
 | accruals | (month) | TTL 5 лет | удаление старше 5 лет | 774 млн | (19 - 9) / 0,9 = 11,1 | 8,6 ГБ |
-| accounts | _id; (bucket, client_id, _id) | _id; составной, ключ шардирования | баланс, удержание, перевод | 91 млн | 16,7; 27,1 | 4,0 ГБ |
-| cards | _id; (bucket, client_id, _id) | _id; составной, ключ шардирования | список карт, удержание | 91 млн | 16,7; 27,1 | 4,0 ГБ |
-| deposits | _id; (bucket, client_id, _id) | _id; составной, ключ шардирования | баланс, операции по вкладу | 63,8 млн | 16,7; 27,1 | 2,8 ГБ |
+| accounts | _id; (client_id, _id) | _id; составной, индекс ключа шардирования | баланс, удержание, перевод | 91 млн | 16,7; 27,1 | 4,0 ГБ |
+| cards | _id; (client_id, _id) | _id; составной, индекс ключа шардирования | список карт, удержание | 91 млн | 16,7; 27,1 | 4,0 ГБ |
+| deposits | _id; (client_id, _id) | _id; составной, индекс ключа шардирования | баланс, операции по вкладу | 63,8 млн | 16,7; 27,1 | 2,8 ГБ |
 | deposits | (status, _id), где status = active | частичный | ночное начисление | 5,8 млн | 16,7 | 0,1 ГБ |
-| loans | _id; (bucket, client_id, _id) | _id; составной, ключ шардирования | баланс, график | 18,9 млн | 16,7; 27,1 | 0,8 ГБ |
+| loans | _id; (client_id, _id) | _id; составной, индекс ключа шардирования | баланс, график | 18,9 млн | 16,7; 27,1 | 0,8 ГБ |
 | loans | (status, _id), где status = active | частичный | ночное начисление | 7,1 млн | 16,7 | 0,1 ГБ |
-| idempotency_keys | _id; (bucket, client_id, key) | _id; уникальный, ключ шардирования | проверка повтора запроса | 10,3 млн | 16,7; (41 - 12) / 0,7 = 41,4 | 0,6 ГБ |
+| idempotency_keys | _id; (client_id, key) | _id; уникальный, индекс ключа шардирования | проверка повтора запроса | 10,3 млн | 16,7; (38 - 9) / 0,7 = 41,4 | 0,6 ГБ |
 | idempotency_keys | (expires_at) | TTL 24 ч | удаление ключей старше суток | 10,3 млн | 16,7 | 0,2 ГБ |
 | **Итого** | | | | | | **10,2 ТБ, 159 ГБ на шард** |
 
@@ -1079,9 +1089,12 @@ flowchart TB
 
 ### 6.6. Шардирование и резервирование
 
-**Ключ шардирования - (bucket, client_id).** Почти все запросы адресованы одному клиенту (п. 5.4), клиентов 54,9 млн, поэтому распределение равномерное. bucket - младшие 10 бит client_id, 1 024 значения.
+**Ключ шардирования всех шардированных коллекций - client_id, по диапазонам.**
+- Почему client_id: почти все запросы адресованы одному клиенту (п. 5.4), а клиентов 54,9 млн, поэтому данные и нагрузка распределяются равномерно. Все документы одной денежной транзакции (счёт, операция, ключ идемпотентности) относятся к одному клиенту и лежат на одном шарде.
+- Почему по диапазонам, а не по хешу: нужны зоны. Зона закрепляет диапазон client_id за шардом. Так все коллекции клиента оказываются на одном шарде, а клиент - в ДЦ своего региона. Зоны задаются только диапазонами ключа.
+- Как устроен client_id: client_id = группа x 2^53 + время регистрации и счётчик. Группа - старшие 10 бит, 1 024 значения. Все client_id одной группы образуют непрерывный диапазон, поэтому группу можно целиком закрепить за шардом.
 
-**Зоны.** Каждому шарду назначен диапазон из 16 бакетов. Диапазоны одинаковы для всех шардированных коллекций, поэтому все документы клиента лежат на одном шарде, и платёж - локальная транзакция. При регистрации client_id получает бакет из шардов, primary которых в ДЦ региона клиента: ДЦ-1 - 23 шарда, ДЦ-2 - 21, ДЦ-3 - 20, пропорционально нагрузке (п. 3.3). Перешардирование - новый шард и перенос части диапазонов зон: балансировщик сам перевозит данные, id не меняются.
+**Зоны.** Каждому шарду назначена зона из 16 соседних групп, то есть один непрерывный диапазон client_id: шард 1 - группы 0-15, шард 2 - группы 16-31 и т. д. Зоны одинаковы для всех 7 шардированных коллекций. При регистрации клиент получает группу из шардов, primary которых в ДЦ его региона: ДЦ-1 - 23 шарда, ДЦ-2 - 21, ДЦ-3 - 20, пропорционально нагрузке (п. 3.3). Внутри ДЦ выбирается наименее заполненная группа, поэтому шарды заполняются равномерно. Перешардирование - новый шард и перенос части групп в его зону: балансировщик сам перевозит данные, client_id не меняются.
 
 **Какие коллекции шардируются и почему**
 
@@ -1098,18 +1111,18 @@ flowchart TB
 | loan_schedule | нет | 97 ГБ; пишется при выдаче кредита и ночном списании (33 в секунду) |
 | clients, devices, client_documents, card_by_pan, справочники | нет | ~80 ГБ, запись около 5 в секунду; ~7 тыс. чтений в секунду берут вторичные члены replica set |
 
-**Число шардов.** Шардируем из-за объёма, а не нагрузки. mongo-core - 36 ТБ данных и 10 ТБ индексов. Нагрузка на шард при 64 шардах в пике - 119 записей и 172 чтения в секунду. Критерий: индексы шарда вместе с горячими данными (2 последних месяца операций и небольшие коллекции) помещаются в RAM узла 256 ГБ.
+**Число шардов.** Шардируем из-за объёма, а не нагрузки. mongo-core - 35,6 ТБ данных и 10,2 ТБ индексов. Нагрузка на шард при 64 шардах в пике - 119 записей и 172 чтения в секунду. Критерий: индексы шарда вместе с горячими данными (2 последних месяца операций и небольшие коллекции) помещаются в RAM узла 256 ГБ.
 
 | Шардов | Данные на шард | Индексы на шард | Горячие данные | Индексы + горячие | В 256 ГБ |
 | --- | --- | --- | --- | --- | --- |
-| 32 | 1,13 ТБ | 319 ГБ | 38 ГБ | 357 ГБ | нет |
-| 48 | 0,76 ТБ | 212 ГБ | 25 ГБ | 238 ГБ | впритык, запас 7 % |
-| **64** | **0,57 ТБ** | **159 ГБ** | **19 ГБ** | **178 ГБ** | **да, запас 30 %** |
+| 32 | 1,11 ТБ | 319 ГБ | 37 ГБ | 356 ГБ | нет |
+| 48 | 0,74 ТБ | 212 ГБ | 25 ГБ | 237 ГБ | впритык, запас 7 % |
+| **64** | **0,56 ТБ** | **159 ГБ** | **19 ГБ** | **178 ГБ** | **да, запас 30 %** |
 
 Узел шарда: 256 ГБ RAM, 2 x 1,92 ТБ NVMe в RAID 1. mongo-global - отдельный шард: 430 ГБ на диске, 47 ГБ индексов.
 
 **Коллекции по месяцам.** В MongoDB нет партиций, поэтому операции хранятся в коллекциях operations_ГГГГММ, граница - Snowflake _id первой секунды месяца. Следующая коллекция создаётся заранее:
-- текущий месяц (9,2 ГБ на шард) целиком в памяти, старые лежат на диске;
+- текущий месяц (9 ГБ на шард) целиком в памяти, старые лежат на диске;
 - по истечении 5 лет коллекция удаляется целиком (drop) вместо удаления 1,9 млрд документов;
 - индексы по external_id и по удержаниям есть только в коллекциях 2 последних месяцев;
 - закрытые месяцы больше не меняются и архивируются один раз (п. 6.9).
@@ -1138,7 +1151,7 @@ flowchart TB
 
 | Хранилище | Библиотека | Как используется |
 | --- | --- | --- |
-| MongoDB | go.mongodb.org/mongo-driver/v2 | пул соединений к роутерам mongos, транзакции, readConcern и writeConcern на уровне транзакции; bucket вычисляется из client_id и передаётся в каждом запросе |
+| MongoDB | go.mongodb.org/mongo-driver/v2 | пул соединений к роутерам mongos, транзакции, readConcern и writeConcern на уровне транзакции; client_id есть в каждом запросе к шардированным коллекциям |
 | Redis | redis/go-redis v9 | клиент Sentinel (NewFailoverClient) сам находит мастер |
 | Kafka | twmb/franz-go | идемпотентный продюсер, группы потребителей |
 | OpenSearch | opensearch-project/opensearch-go v4 | bulk-индексация, поиск с routing |
@@ -1155,10 +1168,10 @@ flowchart TB
 
 **MongoDB:** под (пул драйвера) → роутеры mongos на узлах-пулерах (2 на ДЦ, п. 4.1) → primary или вторичный член нужного шарда.
 - Драйвер получает список mongos и выбирает ближайшие по задержке, то есть роутеры своего ДЦ. При отказе роутера запросы уходят на соседний.
-- mongos маршрутизирует запрос по ключу шардирования и зонам в один шард. Тысячи соединений от подов он сводит к пулам соединений к каждому шарду.
+- mongos по client_id из запроса и зонам направляет запрос в один шард. Тысячи соединений от подов он сводит к пулам соединений к каждому шарду.
 - Денежные запросы читают и пишут только в primary. Маршрутные чтения из mongo-global (card_by_pan, clients по phone, push-токены) идут на ближайший член.
 - После выборов нового primary драйвер и mongos сами переключаются на него, сервисы ничего не перенастраивают.
-- Запрос клиента выполняется в ДЦ, где primary его шарда. Клиентский API попадает туда по GeoDNS, потому что бакет выбран по региону. Межбанковские сообщения передаются туда из ДЦ-1 и ДЦ-2 по межДЦ-каналам (п. 3.3).
+- Запрос клиента выполняется в ДЦ, где primary его шарда. Клиентский API попадает туда по GeoDNS, потому что группа client_id выбрана по региону. Межбанковские сообщения передаются туда из ДЦ-1 и ДЦ-2 по межДЦ-каналам (п. 3.3).
 
 **Redis:** go-redis держит пул соединений к мастеру своего ДЦ, адрес мастера узнаёт у Sentinel. Прокси не нужен: около 6 тыс. операций в секунду.
 
@@ -1174,12 +1187,12 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | Горячий резерв | члены replica set в двух других ДЦ, запись с writeConcern majority | отказ узла или ДЦ | 0 | ~10-15 с |
 | Отложенный член | скрытый член в каждом replica set, secondaryDelaySecs = 4 ч | ошибочное изменение или удаление, замеченное в течение 4 ч | 0 | минуты: документы берутся с отложенного члена |
-| Бэкап + oplog | Percona Backup for MongoDB со вторичных членов: полный физический бэкап раз в месяц, инкрементальный раз в сутки, oplog непрерывно; хранение 35 сут | ошибка, замеченная в течение месяца | восстановление на любую секунду | около часа: шарды восстанавливаются параллельно, 0,73 ТБ на шард |
+| Бэкап + oplog | Percona Backup for MongoDB со вторичных членов: полный физический бэкап раз в месяц, инкрементальный раз в сутки, oplog непрерывно; хранение 35 сут | ошибка, замеченная в течение месяца | восстановление на любую секунду | около часа: шарды восстанавливаются параллельно, 0,72 ТБ на шард |
 | Холодный архив | закрытые коллекции operations_ГГГГММ (старше 2 месяцев) и начисления того же месяца - mongodump раз в месяц, хранение 5 лет | потеря старых данных после 35 сут, срок хранения 5 лет | 0 для закрытых месяцев | часы |
 
 | БД | Что делаем | Объём |
 | --- | --- | --- |
-| MongoDB | эшелоны выше; бэкапы сжаты и зашифрованы, лежат в отдельном S3-кластере бэкапов с копией во втором ДЦ | полный бэкап ~46 ТБ (данные и индексы уже сжаты), 2 полных - 93 ТБ; oplog ~2 КБ на финансовую операцию, 72 ГБ в сутки после сжатия, 2,5 ТБ за 35 сут; архив ~0,4 ТБ в месяц, 24 ТБ за 5 лет |
+| MongoDB | эшелоны выше; бэкапы сжаты и зашифрованы, лежат в отдельном S3-кластере бэкапов с копией во втором ДЦ | полный бэкап ~46 ТБ (данные и индексы уже сжаты), 2 полных - 92 ТБ; oplog ~2 КБ на финансовую операцию, 72 ГБ в сутки после сжатия, 2,5 ТБ за 35 сут; архив ~0,4 ТБ в месяц, 23 ТБ за 5 лет |
 | Redis | не бэкапится: TTL не больше 15 мин, потеря означает повторный вход или повтор действия | - |
 | Kafka | не бэкапится: RF 3, источник данных - MongoDB | - |
 | OpenSearch | инкрементальный снапшот в S3 раз в сутки, хранится 7 снапшотов | ~30 ТБ первый, дальше только новые сегменты |
