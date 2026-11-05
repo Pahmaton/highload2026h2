@@ -1564,7 +1564,7 @@ sequenceDiagram
 ### 10.1. Схема взаимодействия сервисов
 
 ```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 260, "nodeSpacing": 30, "rankSpacing": 55}}}%%
+%%{init: {"look": "classic", "themeCSS": ".edge-pattern-dotted { stroke-dasharray: 6 4 !important; }", "flowchart": {"curve": "basis", "wrappingWidth": 260, "nodeSpacing": 30, "rankSpacing": 55}}}%%
 flowchart TB
   APP["Мобильное приложение<br/>iOS, Android"]
   ING["Ingress NGINX ×4<br/>VIP по ECMP, TLS, лимиты,<br/>маршрутизация по URL"]
